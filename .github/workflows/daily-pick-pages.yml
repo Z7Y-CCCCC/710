@@ -22,6 +22,19 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: r18
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -37,7 +50,24 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client wget gzip
+          python -m pip install psycopg2-binary
+
+      - name: Download and import R18.dev dump
+        env:
+          PGPASSWORD: postgres
+        run: |
+          wget -O latest.gz https://r18.dev/dumps/latest
+          gzip -dc latest.gz | psql -h localhost -U postgres -d r18
+          psql -h localhost -U postgres -d r18 -c "select count(*) from derived_video;"
+
       - name: Generate daily pick JSON
+        env:
+          USE_POSTGRES: "1"
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/r18
         run: python tools/generate_daily_pick.py --out daily-pick-site
 
       - name: Upload Pages artifact

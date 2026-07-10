@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import argparse
 import datetime as dt
 import gzip
@@ -9,10 +9,92 @@ import random
 import tempfile
 import urllib.request
 import zipfile
+import subprocess
 from pathlib import Path
 
 DEFAULT_SOURCE_URL = "https://r18.dev/dumps/latest"
 DEFAULT_PREFERENCES = {"tags": [], "makers": [], "actresses": [], "avoid_tags": []}
+
+def generate_from_postgres(out_dir, preferences):
+    import psycopg2
+    conn = psycopg2.connect(os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/r18"))
+    cur = conn.cursor()
+    pref_terms = [*(preferences.get("tags", []) or []), *(preferences.get("makers", []) or []), *(preferences.get("actresses", []) or [])]
+    where = "v.dvd_id IS NOT NULL AND v.title_ja IS NOT NULL AND v.jacket_full_url IS NOT NULL"
+    params = []
+    if pref_terms:
+        clauses = []
+        for term in pref_terms:
+            like = f"%{term}%"
+            params.extend([like, like, like])
+            clauses.append("(v.title_ja ILIKE %s OR v.title_en ILIKE %s OR COALESCE(m.name_ja,'') ILIKE %s)")
+        where += " AND (" + " OR ".join(clauses) + ")"
+    sql = f"""
+        SELECT v.dvd_id, COALESCE(v.title_en, v.title_ja), v.jacket_full_url, v.release_date,
+               COALESCE(m.name_en, m.name_ja, ''), v.content_id, v.service_code
+        FROM derived_video v
+        LEFT JOIN derived_maker m ON v.maker_id = m.id
+        WHERE {where}
+        ORDER BY random()
+        LIMIT 1
+    """
+    cur.execute(sql, params)
+    row = cur.fetchone()
+    if not row:
+        cur.execute("""
+            SELECT dvd_id, COALESCE(title_en, title_ja), jacket_full_url, release_date,
+                   '', content_id, service_code
+            FROM derived_video
+            WHERE dvd_id IS NOT NULL AND title_ja IS NOT NULL AND jacket_full_url IS NOT NULL
+            ORDER BY random()
+            LIMIT 1
+        """)
+        row = cur.fetchone()
+    if not row:
+        raise RuntimeError("No valid rows found in PostgreSQL database")
+    code, title, jacket, release_date, maker, content_id, service_code = row
+    cur.execute("""
+        SELECT COALESCE(c.name_en, c.name_ja)
+        FROM derived_video_category vc
+        JOIN derived_category c ON vc.category_id = c.id
+        WHERE vc.content_id = %s
+        LIMIT 8
+    """, (content_id,))
+    tags = [r[0] for r in cur.fetchall() if r and r[0]]
+    cur.execute("""
+        SELECT COALESCE(a.name_romaji, a.name_kanji)
+        FROM derived_video_actress va
+        JOIN derived_actress a ON va.actress_id = a.id
+        WHERE va.content_id = %s
+        ORDER BY va.ordinality ASC
+        LIMIT 5
+    """, (content_id,))
+    actresses = [r[0] for r in cur.fetchall() if r and r[0]]
+    if service_code == "digital":
+        cover = "https://awsimgsrc.dmm.com/dig/" + str(jacket).replace("adult/", "") + ".jpg"
+    else:
+        cover = "https://pics.dmm.co.jp/" + str(jacket) + ".jpg"
+    payload = {
+        "ok": True,
+        "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "date": dt.date.today().isoformat(),
+        "source": "R18.dev PostgreSQL dump",
+        "pick": {
+            "code": str(code).upper(),
+            "title": str(title),
+            "cover": cover,
+            "releaseDate": release_date.isoformat() if hasattr(release_date, "isoformat") else text(release_date),
+            "maker": text(maker),
+            "actresses": actresses,
+            "tags": tags,
+            "source": "R18.dev",
+            "url": f"https://r18.dev/videos/vod/movies/detail/-/id={content_id}/",
+        },
+        "reason": "Selected by preference tags and daily seed.",
+    }
+    cur.close()
+    conn.close()
+    write_site(out_dir, payload)
 
 
 def read_json(path, fallback):
@@ -175,6 +257,10 @@ def main():
     source_url = args.source_url or os.environ.get("DAILY_PICK_SOURCE_URL", DEFAULT_SOURCE_URL)
     generated_at = dt.datetime.now(dt.timezone.utc).isoformat()
 
+    if os.environ.get('USE_POSTGRES') == '1':
+        generate_from_postgres(out_dir, preferences)
+        return
+
     try:
         temp_holder = None
         if args.source_file:
@@ -228,6 +314,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
