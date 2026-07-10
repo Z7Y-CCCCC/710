@@ -1,0 +1,59 @@
+name: Build Desk Orb Firmware
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "firmware/desk-orb-pio/**"
+      - ".github/workflows/build-desk-orb.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO and esptool
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio esptool
+
+      - name: Build firmware
+        working-directory: firmware/desk-orb-pio
+        run: pio run
+
+      - name: Pack flash artifacts
+        shell: bash
+        working-directory: firmware/desk-orb-pio
+        run: |
+          set -euxo pipefail
+          ENV_DIR=".pio/build/desk_orb_esp32s3"
+          mkdir -p artifact
+          cp "$ENV_DIR/firmware.bin" artifact/
+          cp "$ENV_DIR/bootloader.bin" artifact/
+          cp "$ENV_DIR/partitions.bin" artifact/
+          BOOT_APP0="$(find ~/.platformio/packages -name boot_app0.bin | head -n 1)"
+          cp "$BOOT_APP0" artifact/boot_app0.bin
+          python -m esptool --chip esp32s3 merge_bin \
+            --flash_mode qio --flash_freq 80m --flash_size 16MB \
+            -o artifact/desk-orb-merged.bin \
+            0x0 artifact/bootloader.bin \
+            0x8000 artifact/partitions.bin \
+            0xe000 artifact/boot_app0.bin \
+            0x10000 artifact/firmware.bin
+          cat > artifact/flash-local-windows.ps1 <<'EOF'
+          python -m esptool --chip esp32s3 --port COM3 --baud 460800 write_flash -z --flash_mode qio --flash_freq 80m --flash_size 16MB 0x0 desk-orb-merged.bin
+          EOF
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-orb-firmware
+          path: firmware/desk-orb-pio/artifact/*
