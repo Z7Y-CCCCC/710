@@ -17,6 +17,9 @@
 
 const char* DAILY_PICK_URL = "https://z7y-ccccc.github.io/710/today.json";
 const char* BILI_STAT_URL = "https://api.bilibili.com/x/relation/stat?vmid=3546867614878349";
+const int COVER_W = 72;
+const int COVER_H = 96;
+const size_t COVER_BYTES = COVER_W * COVER_H * 2;
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, GFX_NOT_DEFINED, HSPI, true);
 Arduino_GFX *gfx = new Arduino_ST7789(bus, TFT_RST, 0, true, 240, 240, 0, 0);
@@ -30,12 +33,15 @@ String pickCode = "--";
 String pickTitle = "loading...";
 String pickTags = "";
 String pickCover = "";
+String pickCoverRgb565 = "";
 String pickMaker = "";
 String biliFans = "--";
 String statusLine = "starting";
 unsigned long lastFetch = 0;
 int page = 0;
 unsigned long lastPage = 0;
+bool coverReady = false;
+uint16_t coverPixels[COVER_W * COVER_H];
 
 uint16_t C_BG = RGB565(238, 244, 248);
 uint16_t C_INK = RGB565(28, 38, 51);
@@ -111,11 +117,13 @@ void drawAccountPage() {
   drawFooter(statusLine);
 }
 
-void drawPickPage() {
-  gfx->fillScreen(C_BG);
-  drawHeader("PICK");
-  gfx->fillRoundRect(16, 54, 208, 142, 9, C_PANEL);
-  gfx->fillRoundRect(28, 68, 72, 96, 7, RGB565(30, 36, 48));
+void drawCoverSlot() {
+  gfx->fillRoundRect(28, 68, COVER_W, COVER_H, 7, RGB565(30, 36, 48));
+  if (coverReady) {
+    gfx->draw16bitRGBBitmap(28, 68, coverPixels, COVER_W, COVER_H);
+    gfx->drawRoundRect(28, 68, COVER_W, COVER_H, 7, RGB565(30, 36, 48));
+    return;
+  }
   gfx->setTextColor(RGB565(242, 184, 75));
   gfx->setTextSize(2);
   gfx->setCursor(38, 94);
@@ -123,6 +131,13 @@ void drawPickPage() {
   gfx->setTextSize(1);
   gfx->setCursor(42, 122);
   gfx->print("COVER");
+}
+
+void drawPickPage() {
+  gfx->fillScreen(C_BG);
+  drawHeader("PICK");
+  gfx->fillRoundRect(16, 54, 208, 142, 9, C_PANEL);
+  drawCoverSlot();
 
   gfx->setTextColor(C_RED);
   gfx->setTextSize(2);
@@ -220,6 +235,41 @@ String httpsGet(const char* url) {
   return body;
 }
 
+bool httpsGetBytes(const String& url, uint8_t* target, size_t expected) {
+  if (!url.length()) return false;
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(15000);
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setUserAgent("DeskOrb ESP32S3");
+  http.setTimeout(15000);
+  if (!http.begin(client, url)) return false;
+  int code = http.GET();
+  if (code < 200 || code >= 300) {
+    http.end();
+    return false;
+  }
+  WiFiClient* stream = http.getStreamPtr();
+  size_t got = 0;
+  unsigned long deadline = millis() + 15000;
+  while (got < expected && millis() < deadline) {
+    int available = stream->available();
+    if (available > 0) {
+      size_t want = min((size_t)available, expected - got);
+      int readNow = stream->readBytes(target + got, want);
+      if (readNow > 0) {
+        got += (size_t)readNow;
+        deadline = millis() + 5000;
+      }
+    } else {
+      delay(10);
+    }
+  }
+  http.end();
+  return got == expected;
+}
+
 void fetchBili() {
   String body = httpsGet(BILI_STAT_URL);
   JsonDocument doc;
@@ -227,6 +277,13 @@ void fetchBili() {
     long fans = doc["data"]["follower"] | 0;
     biliFans = shortNum(fans);
   }
+}
+
+void fetchCover() {
+  coverReady = false;
+  if (!pickCoverRgb565.length()) return;
+  bool ok = httpsGetBytes(pickCoverRgb565, (uint8_t*)coverPixels, COVER_BYTES);
+  coverReady = ok;
 }
 
 void fetchPick() {
@@ -241,6 +298,8 @@ void fetchPick() {
   pickCode = doc["pick"]["code"] | "--";
   pickTitle = doc["pick"]["title"] | "--";
   pickMaker = doc["pick"]["maker"] | "";
+  pickCover = doc["pick"]["cover"] | "";
+  pickCoverRgb565 = doc["pick"]["coverRgb565"] | "";
   pickTags = "";
   JsonArray tags = doc["pick"]["tags"].as<JsonArray>();
   for (JsonVariant t : tags) {
@@ -248,6 +307,7 @@ void fetchPick() {
     pickTags += t.as<String>();
     if (pickTags.length() > 36) break;
   }
+  fetchCover();
 }
 
 void refreshData() {

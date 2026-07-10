@@ -10,10 +10,14 @@ import tempfile
 import urllib.request
 import zipfile
 import subprocess
+from urllib.parse import urljoin
 from pathlib import Path
 
 DEFAULT_SOURCE_URL = "https://r18.dev/dumps/latest"
 DEFAULT_PREFERENCES = {"tags": [], "makers": [], "actresses": [], "avoid_tags": []}
+PAGES_BASE_URL = os.environ.get("PAGES_BASE_URL", "https://z7y-ccccc.github.io/710/")
+COVER_W = 72
+COVER_H = 96
 
 def generate_from_postgres(out_dir, preferences):
     import psycopg2
@@ -152,6 +156,57 @@ def download(url, target):
                 handle.write(chunk)
 
 
+def download_bytes(url, timeout=60):
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 DeskOrbDailyPick/1.0",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Referer": "https://www.dmm.co.jp/",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def rgb_to_rgb565(r, g, b):
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+
+
+def prepare_cover_asset(out_dir, payload):
+    if not payload.get("ok") or not payload.get("pick"):
+        return
+    cover_url = payload["pick"].get("cover")
+    if not cover_url:
+        return
+    try:
+        from PIL import Image, ImageOps
+
+        data = download_bytes(cover_url)
+        image = Image.open(io.BytesIO(data))
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        thumb = ImageOps.fit(image, (COVER_W, COVER_H), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+
+        raw = bytearray()
+        for r, g, b in thumb.getdata():
+            value = rgb_to_rgb565(r, g, b)
+            raw.append(value & 0xFF)
+            raw.append((value >> 8) & 0xFF)
+
+        raw_name = f"cover-{COVER_W}x{COVER_H}.rgb565"
+        jpg_name = f"cover-{COVER_W}x{COVER_H}.jpg"
+        (out_dir / raw_name).write_bytes(raw)
+        thumb.save(out_dir / jpg_name, quality=88, optimize=True)
+
+        payload["pick"]["coverRgb565"] = urljoin(PAGES_BASE_URL, raw_name)
+        payload["pick"]["coverPreview"] = urljoin(PAGES_BASE_URL, jpg_name)
+        payload["pick"]["coverWidth"] = COVER_W
+        payload["pick"]["coverHeight"] = COVER_H
+        payload["pick"]["coverFormat"] = "rgb565le"
+    except Exception as exc:
+        payload["pick"]["coverAssetError"] = str(exc)
+
+
 def iter_lines_from_dump(path):
     raw = path.read_bytes()[:4]
     if zipfile.is_zipfile(path):
@@ -229,13 +284,17 @@ def choose_daily(items, preferences):
 
 def write_site(out_dir, payload):
     out_dir.mkdir(parents=True, exist_ok=True)
+    prepare_cover_asset(out_dir, payload)
     (out_dir / "today.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "index.html").write_text(
         """<!doctype html>
 <html lang=\"zh-CN\">
 <head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Desk Orb Daily Pick</title></head>
-<body><pre id=\"out\">loading...</pre><script>
-fetch('./today.json').then(r=>r.json()).then(j=>out.textContent=JSON.stringify(j,null,2));
+<body><img id=\"cover\" style=\"max-width:220px;border-radius:12px\"><pre id=\"out\">loading...</pre><script>
+fetch('./today.json').then(r=>r.json()).then(j=>{
+  out.textContent=JSON.stringify(j,null,2);
+  if(j.pick && j.pick.coverPreview) cover.src=j.pick.coverPreview;
+});
 </script></body></html>
 """,
         encoding="utf-8",
