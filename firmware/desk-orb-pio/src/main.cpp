@@ -16,6 +16,7 @@
 #define BOOT_BTN 0
 
 const char* DAILY_PICK_URL = "https://z7y-ccccc.github.io/710/today.json";
+const char* FALLBACK_COVER_RGB565_URL = "https://z7y-ccccc.github.io/710/cover-72x96.rgb565";
 const char* BILI_STAT_URL = "https://api.bilibili.com/x/relation/stat?vmid=3546867614878349";
 const int COVER_W = 72;
 const int COVER_H = 96;
@@ -37,6 +38,7 @@ String pickCoverRgb565 = "";
 String pickMaker = "";
 String biliFans = "--";
 String statusLine = "starting";
+String coverStatus = "cover not loaded";
 unsigned long lastFetch = 0;
 int page = 0;
 unsigned long lastPage = 0;
@@ -158,7 +160,11 @@ void drawPickPage() {
   gfx->setCursor(112, 166);
   gfx->setTextColor(C_GREEN);
   gfx->print(pickTags.substring(0, 20));
-  drawFooter(pickMaker.length() ? pickMaker : "GitHub Pages daily JSON");
+  if (coverReady) {
+    drawFooter(pickMaker.length() ? pickMaker : "cover ok");
+  } else {
+    drawFooter(coverStatus);
+  }
 }
 
 void drawSetupPage(const String& ipText) {
@@ -235,24 +241,31 @@ String httpsGet(const char* url) {
   return body;
 }
 
-bool httpsGetBytes(const String& url, uint8_t* target, size_t expected) {
-  if (!url.length()) return false;
+bool httpsGetBytes(const String& url, uint8_t* target, size_t expected, String& reason) {
+  if (!url.length()) {
+    reason = "cover no url";
+    return false;
+  }
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(15000);
+  client.setTimeout(20000);
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setUserAgent("DeskOrb ESP32S3");
-  http.setTimeout(15000);
-  if (!http.begin(client, url)) return false;
+  http.setUserAgent("Mozilla/5.0 DeskOrb ESP32S3");
+  http.setTimeout(20000);
+  if (!http.begin(client, url)) {
+    reason = "cover begin fail";
+    return false;
+  }
   int code = http.GET();
   if (code < 200 || code >= 300) {
+    reason = "cover http " + String(code);
     http.end();
     return false;
   }
   WiFiClient* stream = http.getStreamPtr();
   size_t got = 0;
-  unsigned long deadline = millis() + 15000;
+  unsigned long deadline = millis() + 25000;
   while (got < expected && millis() < deadline) {
     int available = stream->available();
     if (available > 0) {
@@ -260,14 +273,19 @@ bool httpsGetBytes(const String& url, uint8_t* target, size_t expected) {
       int readNow = stream->readBytes(target + got, want);
       if (readNow > 0) {
         got += (size_t)readNow;
-        deadline = millis() + 5000;
+        deadline = millis() + 8000;
       }
     } else {
       delay(10);
     }
   }
   http.end();
-  return got == expected;
+  if (got != expected) {
+    reason = "cover bytes " + String(got) + "/" + String(expected);
+    return false;
+  }
+  reason = "cover ok";
+  return true;
 }
 
 void fetchBili() {
@@ -281,18 +299,29 @@ void fetchBili() {
 
 void fetchCover() {
   coverReady = false;
-  if (!pickCoverRgb565.length()) return;
-  bool ok = httpsGetBytes(pickCoverRgb565, (uint8_t*)coverPixels, COVER_BYTES);
+  String url = pickCoverRgb565.length() ? pickCoverRgb565 : String(FALLBACK_COVER_RGB565_URL);
+  bool ok = httpsGetBytes(url, (uint8_t*)coverPixels, COVER_BYTES, coverStatus);
+  if (!ok && url != FALLBACK_COVER_RGB565_URL) {
+    ok = httpsGetBytes(String(FALLBACK_COVER_RGB565_URL), (uint8_t*)coverPixels, COVER_BYTES, coverStatus);
+  }
   coverReady = ok;
 }
 
 void fetchPick() {
   String body = httpsGet(DAILY_PICK_URL);
   JsonDocument doc;
-  if (deserializeJson(doc, body) != DeserializationError::Ok) return;
+  if (deserializeJson(doc, body) != DeserializationError::Ok) {
+    pickCode = "PICK";
+    pickTitle = "daily JSON loading";
+    pickCoverRgb565 = FALLBACK_COVER_RGB565_URL;
+    fetchCover();
+    return;
+  }
   if (!(doc["ok"] | false)) {
     pickCode = "NO DATA";
     pickTitle = doc["error"] | "today.json not ready";
+    pickCoverRgb565 = FALLBACK_COVER_RGB565_URL;
+    fetchCover();
     return;
   }
   pickCode = doc["pick"]["code"] | "--";
@@ -300,6 +329,9 @@ void fetchPick() {
   pickMaker = doc["pick"]["maker"] | "";
   pickCover = doc["pick"]["cover"] | "";
   pickCoverRgb565 = doc["pick"]["coverRgb565"] | "";
+  if (!pickCoverRgb565.length()) {
+    pickCoverRgb565 = FALLBACK_COVER_RGB565_URL;
+  }
   pickTags = "";
   JsonArray tags = doc["pick"]["tags"].as<JsonArray>();
   for (JsonVariant t : tags) {
