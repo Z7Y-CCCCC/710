@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desk Orb Daily Pick</title></head>
+<body><pre id="out">loading...</pre><script>
+fetch('./today.json').then(r=>r.json()).then(j=>out.textContent=JSON.stringify(j,null,2));
+</script></body></html>

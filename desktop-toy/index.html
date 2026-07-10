@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Desk Orb</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="device" aria-label="Desk Orb">
+        <div class="bezel">
+          <canvas id="screen" width="240" height="240"></canvas>
+        </div>
+        <div class="status-row">
+          <span id="modeLabel">ORBIT</span>
+          <span id="tempLabel">24C</span>
+          <span id="focusLabel">25:00</span>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Controls">
+        <div class="brand">
+          <p>DESK ORB</p>
+          <strong>账号小星盘</strong>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="Mode">
+          <button class="tab is-active" data-mode="orbit" title="星盘">◎</button>
+          <button class="tab" data-mode="radar" title="账号雷达">◉</button>
+          <button class="tab" data-mode="focus" title="专注">◴</button>
+          <button class="tab" data-mode="garden" title="生长">✦</button>
+          <button class="tab" data-mode="night" title="夜间">☾</button>
+        </div>
+
+        <div class="controls">
+          <label>
+            <span>亮度</span>
+            <input id="brightness" type="range" min="45" max="100" value="82" />
+          </label>
+          <label>
+            <span>节奏</span>
+            <input id="tempo" type="range" min="20" max="90" value="46" />
+          </label>
+          <label>
+            <span>习惯</span>
+            <input id="habit" type="range" min="0" max="100" value="64" />
+          </label>
+        </div>
+
+        <div class="mini-form">
+          <label>
+            <span>倒计时</span>
+            <input id="countdownName" type="text" maxlength="8" value="旅行" />
+          </label>
+          <label>
+            <span>日期</span>
+            <input id="countdownDate" type="date" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="focusToggle" title="开始/暂停">▶</button>
+          <button id="focusReset" title="重置">↺</button>
+          <button id="spark" title="换一句/下一项">✧</button>
+        </div>
+
+        <div class="readout">
+          <p id="dayLine">把大事缩小，把小事做完。</p>
+          <p><span id="clockText">00:00</span><span id="dateText">--</span></p>
+        </div>
+      </section>
+    </main>
+
+    <script src="./social-data.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
