@@ -42,14 +42,14 @@ jobs:
           BOOT_APP0="$(find ~/.platformio/packages -name boot_app0.bin | head -n 1)"
           cp "$BOOT_APP0" artifact/boot_app0.bin
           python -m esptool --chip esp32s3 merge_bin \
-            --flash_mode qio --flash_freq 80m --flash_size 16MB \
+            --flash_mode dio --flash_freq 40m --flash_size 16MB \
             -o artifact/desk-orb-merged.bin \
             0x0 artifact/bootloader.bin \
             0x8000 artifact/partitions.bin \
             0xe000 artifact/boot_app0.bin \
             0x10000 artifact/firmware.bin
           cat > artifact/flash-local-windows.ps1 <<'EOF'
-          python -m esptool --chip esp32s3 --port COM3 --baud 460800 write_flash -z --flash_mode qio --flash_freq 80m --flash_size 16MB 0x0 desk-orb-merged.bin
+          python -m esptool --chip esp32s3 --port COM3 --baud 460800 write_flash -z --flash_mode dio --flash_freq 40m --flash_size 16MB 0x0 desk-orb-merged.bin
           EOF
 
       - name: Upload firmware artifact
